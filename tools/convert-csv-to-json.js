@@ -1,60 +1,63 @@
-#!/usr/bin/env node
-/*
-  Converts the two exported Google Sheets CSV files into local JSON.
+const fs = require("fs");
+const path = require("path");
 
-  Input files:
-    data/source-district-representatives.csv
-    data/source-congress-overview.csv
+const DATA_DIR = path.join(__dirname, "..", "data");
 
-  Output files:
-    data/districts.json
-    data/representatives.json
-    data/congress_overview.json
-*/
+const DISTRICTS_CSV = path.join(DATA_DIR, "source-district-representatives.csv");
+const OVERVIEW_CSV = path.join(DATA_DIR, "source-congress-overview.csv");
 
-const fs = require('fs');
-const path = require('path');
+const DISTRICTS_JSON = path.join(DATA_DIR, "districts.json");
+const REPRESENTATIVES_JSON = path.join(DATA_DIR, "representatives.json");
+const OVERVIEW_JSON = path.join(DATA_DIR, "congress_overview.json");
 
-const ROOT = path.resolve(__dirname, '..');
-const DATA = path.join(ROOT, 'data');
-const DISTRICTS_CSV = path.join(DATA, 'source-district-representatives.csv');
-const OVERVIEW_CSV = path.join(DATA, 'source-congress-overview.csv');
-
-const CONGRESSES = Array.from({ length: 13 }, (_, i) => {
-  const n = i + 8;
-  const suffix = n % 100 >= 11 && n % 100 <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th');
-  return `${n}${suffix} Congress`;
-});
-const congressOrder = Object.fromEntries(CONGRESSES.map((c, i) => [c, i]));
+const ALL_CONGRESSES = [
+  "8th Congress",
+  "9th Congress",
+  "10th Congress",
+  "11th Congress",
+  "12th Congress",
+  "13th Congress",
+  "14th Congress",
+  "15th Congress",
+  "16th Congress",
+  "17th Congress",
+  "18th Congress",
+  "19th Congress",
+  "20th Congress"
+];
 
 function parseCSV(text) {
   const rows = [];
   let row = [];
-  let cell = '';
+  let cell = "";
   let inQuotes = false;
 
   for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
+    const char = text[i];
     const next = text[i + 1];
 
-    if (ch === '"' && inQuotes && next === '"') {
+    if (char === '"' && inQuotes && next === '"') {
       cell += '"';
       i++;
-    } else if (ch === '"') {
+    } else if (char === '"') {
       inQuotes = !inQuotes;
-    } else if (ch === ',' && !inQuotes) {
+    } else if (char === "," && !inQuotes) {
       row.push(cell.trim());
-      cell = '';
-    } else if ((ch === '\n' || ch === '\r') && !inQuotes) {
+      cell = "";
+    } else if ((char === "\n" || char === "\r") && !inQuotes) {
       if (cell || row.length) {
         row.push(cell.trim());
         rows.push(row);
       }
+
       row = [];
-      cell = '';
-      if (ch === '\r' && next === '\n') i++;
+      cell = "";
+
+      if (char === "\r" && next === "\n") {
+        i++;
+      }
     } else {
-      cell += ch;
+      cell += char;
     }
   }
 
@@ -63,186 +66,202 @@ function parseCSV(text) {
     rows.push(row);
   }
 
-  return rows;
-}
-
-function normCongress(value) {
-  const s = String(value || '').trim();
-  const match = s.match(/^(\d+)(?:st|nd|rd|th)?\s*congress$/i);
-  if (!match) return s;
-
-  const n = Number(match[1]);
-  const suffix = n % 100 >= 11 && n % 100 <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th');
-  return `${n}${suffix} Congress`;
+  return rows.filter(r => r.some(c => String(c || "").trim()));
 }
 
 function cleanKey(value) {
-  return String(value || '')
+  return String(value || "")
     .trim()
     .toLowerCase()
-    .replace(/\s*\/\s*/g, '_')
-    .replace(/[\s-]+/g, '_')
-    .replace(/[^a-z0-9_]/g, '')
-    .replace(/^_+|_+$/g, '');
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }
 
-function cleanNumber(value) {
-  const s = String(value || '').trim().replace(/,/g, '');
-  if (!s) return null;
-  const n = Number(s);
-  return Number.isNaN(n) ? value : n;
+function normalizeCongress(value) {
+  const raw = String(value || "").trim();
+
+  const match = raw.match(/^(\d+)(?:st|nd|rd|th)?\s*Congress$/i);
+  if (!match) return raw;
+
+  const n = Number(match[1]);
+
+  let suffix = "th";
+  if (n % 100 < 11 || n % 100 > 13) {
+    if (n % 10 === 1) suffix = "st";
+    if (n % 10 === 2) suffix = "nd";
+    if (n % 10 === 3) suffix = "rd";
+  }
+
+  return `${n}${suffix} Congress`;
 }
 
-function splitNames(cell) {
-  return String(cell || '')
+function splitNames(value) {
+  return String(value || "")
     .split(/\s*;\s*|\n+/)
-    .map(v => v.replace(/\s+/g, ' ').replace(/[ ,]+$/g, '').trim())
+    .map(v => v.trim())
     .filter(Boolean);
 }
 
-function normalizeText(value) {
-  return String(value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
+function makeId(name) {
+  return String(name || "")
     .toLowerCase()
-    .replace(/[“”"'][^“”"']*[“”"']/g, ' ')
-    .replace(/\b(jr|sr|ii|iii|iv|v|vi|md|dpa|phd|rn)\.?\b/g, ' ')
-    .replace(/[^a-z0-9,\s.-]+/g, ' ')
-    .replace(/[.-]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
-function slugify(value) {
-  return String(value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'item';
-}
+function surnameOf(name) {
+  const value = String(name || "").trim();
 
-function personKey(name) {
-  const suffixWords = new Set(['jr', 'sr', 'ii', 'iii', 'iv', 'v', 'vi', 'md', 'dpa', 'phd', 'rn']);
-  const weakFirst = new Set(['ma', 'maria', 'jr', 'sr']);
-  const n = normalizeText(name);
-  if (!n) return '';
+  if (!value) return "Unknown";
 
-  if (n.includes(',')) {
-    const [surname, rest] = n.split(',', 2);
-    const tokens = rest.split(/\s+/).filter(t => t && !suffixWords.has(t));
-    let first = tokens.find(t => !weakFirst.has(t)) || tokens[0] || '';
-    return `${surname.trim()}|${first}`.replace(/\|$/g, '');
+  if (value.includes(",")) {
+    return value.split(",")[0].trim();
   }
 
-  const tokens = n.split(/\s+/).filter(t => t && !suffixWords.has(t));
-  if (tokens.length >= 2) return `${tokens[0]}|${tokens[tokens.length - 1]}`;
-  return n;
+  return value.split(/\s+/)[0].trim();
 }
 
-function readRequired(filePath) {
+function readCSV(filePath) {
   if (!fs.existsSync(filePath)) {
-    console.error(`Missing file: ${filePath}`);
-    process.exit(1);
+    throw new Error(`Missing CSV file: ${filePath}`);
   }
-  return fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '');
+
+  return parseCSV(fs.readFileSync(filePath, "utf8"));
 }
 
-function buildOverview() {
-  const rows = parseCSV(readRequired(OVERVIEW_CSV));
-  const header = rows[0] || [];
+function convertDistricts() {
+  const rows = readCSV(DISTRICTS_CSV);
 
-  return rows.slice(1).filter(row => row.some(Boolean) && row[0]).map(row => {
-    const obj = {};
-    const notes = [];
-    header.forEach((h, i) => {
-      if (!h.trim()) {
-        if ((row[i] || '').trim()) notes.push(row[i]);
-        return;
-      }
-      const key = cleanKey(h);
-      let val = row[i] || '';
-      if (['members', 'district_seats', 'party_list_sectoral_seats', 'theoretical_seats', 'seat_difference'].includes(key)) {
-        val = cleanNumber(val);
-      }
-      obj[key] = val;
+  const header = rows[0];
+  const body = rows.slice(1);
+
+  const regionIndex = 0;
+  const districtIndex = 1;
+
+  const congressColumns = header
+    .map((column, index) => ({
+      index,
+      congress: normalizeCongress(column)
+    }))
+    .filter(item => ALL_CONGRESSES.includes(item.congress));
+
+  const districts = body
+    .filter(row => row[regionIndex] && row[districtIndex])
+    .map(row => {
+      const history = {};
+
+      congressColumns.forEach(({ index, congress }) => {
+        const names = splitNames(row[index]);
+
+        if (names.length) {
+          history[congress] = names;
+        }
+      });
+
+      return {
+        region: row[regionIndex],
+        district: row[districtIndex],
+        history
+      };
     });
-    obj.notes = notes.join('\n');
-    obj.period_normalized = normCongress(obj.period);
-    return obj;
-  });
+
+  return districts;
 }
 
-function buildDistrictsAndRepresentatives() {
-  const rows = parseCSV(readRequired(DISTRICTS_CSV));
-  const header = rows[0] || [];
-  const congressCols = header.map((h, i) => [i, normCongress(h)]).filter(([, c]) => CONGRESSES.includes(c));
-  const districts = [];
+function buildRepresentativesFromDistricts(districts) {
   const people = new Map();
 
-  rows.slice(1).forEach(row => {
-    if (!row.some(Boolean)) return;
-
-    const region = row[0] || '';
-    const district = row[1] || '';
-    if (!region || !district) return;
-
-    const history = {};
-
-    congressCols.forEach(([index, congress]) => {
-      const names = splitNames(row[index]);
-      if (!names.length) return;
-      history[congress] = names;
-
+  districts.forEach(district => {
+    Object.entries(district.history || {}).forEach(([congress, names]) => {
       names.forEach(name => {
-        const key = personKey(name);
-        if (!key) return;
+        const id = makeId(name);
 
-        if (!people.has(key)) {
-          people.set(key, {
-            id: slugify(key),
+        if (!people.has(id)) {
+          people.set(id, {
+            id,
             name,
+            surname: surnameOf(name),
             aliases: [],
             congresses: [],
-            terms: [],
             regions: [],
-            districts: []
+            districts: [],
+            terms: []
           });
         }
 
-        const person = people.get(key);
-        if (name !== person.name && !person.aliases.includes(name)) person.aliases.push(name);
-        if (!person.congresses.includes(congress)) person.congresses.push(congress);
-        if (!person.regions.includes(region)) person.regions.push(region);
-        if (!person.districts.includes(district)) person.districts.push(district);
-        person.terms.push({ congress, region, district, name_used: name });
+        const person = people.get(id);
+
+        if (!person.congresses.includes(congress)) {
+          person.congresses.push(congress);
+        }
+
+        if (!person.regions.includes(district.region)) {
+          person.regions.push(district.region);
+        }
+
+        if (!person.districts.includes(district.district)) {
+          person.districts.push(district.district);
+        }
+
+        person.terms.push({
+          congress,
+          region: district.region,
+          district: district.district,
+          name_used: name
+        });
       });
     });
-
-    districts.push({ region, district, history });
   });
 
-  const representatives = Array.from(people.values()).map(person => {
-    person.congresses.sort((a, b) => (congressOrder[a] ?? 999) - (congressOrder[b] ?? 999));
-    person.terms.sort((a, b) => (congressOrder[a.congress] ?? 999) - (congressOrder[b.congress] ?? 999));
-    person.term_count = person.congresses.length;
-    person.first_congress = person.congresses[0] || '';
-    person.last_congress = person.congresses[person.congresses.length - 1] || '';
-    return person;
-  }).sort((a, b) => a.name.localeCompare(b.name));
-
-  districts.sort((a, b) => `${a.region} ${a.district}`.localeCompare(`${b.region} ${b.district}`));
-
-  return { districts, representatives };
+  return Array.from(people.values())
+    .map(person => ({
+      ...person,
+      congresses: person.congresses.sort((a, b) => parseInt(a) - parseInt(b)),
+      term_count: person.congresses.length
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-const overview = buildOverview();
-const { districts, representatives } = buildDistrictsAndRepresentatives();
+function convertOverview() {
+  if (!fs.existsSync(OVERVIEW_CSV)) {
+    return [];
+  }
 
-fs.writeFileSync(path.join(DATA, 'congress_overview.json'), JSON.stringify(overview, null, 2));
-fs.writeFileSync(path.join(DATA, 'districts.json'), JSON.stringify(districts, null, 2));
-fs.writeFileSync(path.join(DATA, 'representatives.json'), JSON.stringify(representatives, null, 2));
+  const rows = readCSV(OVERVIEW_CSV);
+  const header = rows[0].map(cleanKey);
 
-console.log(`Created data/congress_overview.json (${overview.length} rows)`);
-console.log(`Created data/districts.json (${districts.length} rows)`);
-console.log(`Created data/representatives.json (${representatives.length} representatives)`);
+  return rows.slice(1).map(row => {
+    const item = {};
+
+    header.forEach((key, index) => {
+      item[key || `column_${index + 1}`] = row[index] || "";
+    });
+
+    return item;
+  });
+}
+
+function writeJSON(filePath, data) {
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
+  console.log(`Wrote ${path.relative(process.cwd(), filePath)}`);
+}
+
+function main() {
+  const districts = convertDistricts();
+  const representatives = buildRepresentativesFromDistricts(districts);
+  const overview = convertOverview();
+
+  writeJSON(DISTRICTS_JSON, districts);
+  writeJSON(REPRESENTATIVES_JSON, representatives);
+  writeJSON(OVERVIEW_JSON, overview);
+
+  console.log("");
+  console.log("CSV to JSON conversion complete.");
+  console.log(`Districts: ${districts.length}`);
+  console.log(`Representatives: ${representatives.length}`);
+  console.log(`Congress overview rows: ${overview.length}`);
+}
+
+main();
