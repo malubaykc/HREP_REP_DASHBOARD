@@ -1,0 +1,45 @@
+name: Convert CSV to JSON
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "data/**/*.csv"
+      - "tools/convert-csv-to-json.js"
+      - ".github/workflows/convert-csv-to-json.yml"
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Convert CSV files to JSON
+        run: node tools/convert-csv-to-json.js
+
+      - name: Commit updated JSON files
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git add data/representatives.json data/districts.json data/congress_overview.json
+
+          if git diff --cached --quiet; then
+            echo "No JSON changes to commit."
+          else
+            git commit -m "Auto-convert CSV data to JSON"
+            git push
+          fi
